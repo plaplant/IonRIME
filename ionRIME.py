@@ -2,7 +2,7 @@ import numpy as np
 import healpy as hp
 import os
 from scipy import interpolate
-import ionRIME_utils as zt
+import ionRIME_funcs as irf
 import time
 from numba import jit
 
@@ -56,12 +56,12 @@ def transform_basis(nside, jones, z0_cza, R_z0):
 
     fR = np.einsum('ab,bc->ac', Rb, R_z0) # matrix product of two rotations
 
-    tb, pb = zt.rotate_sphr_coords(fR, cza, ra)
+    tb, pb = irf.rotate_sphr_coords(fR, cza, ra)
 
-    cza_v = zt.t_hat_cart(cza, ra)
-    ra_v = zt.p_hat_cart(cza, ra)
+    cza_v = irf.t_hat_cart(cza, ra)
+    ra_v = irf.p_hat_cart(cza, ra)
 
-    tb_v = zt.t_hat_cart(tb, pb)
+    tb_v = irf.t_hat_cart(tb, pb)
 
     fRcza_v = np.einsum('ab...,b...->a...', fR, cza_v)
     fRra_v = np.einsum('ab...,b...->a...', fR, ra_v)
@@ -102,15 +102,15 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
     hpxidx = np.arange(npix)
     cza, ra = hp.pix2ang(nside_in, hpxidx)
 
-    z0 = zt.r_hat_cart(z0_cza, 0.)
+    z0 = irf.r_hat_cart(z0_cza, 0.)
 
     RotAxis = np.cross(z0, np.array([0,0,1.]))
     RotAxis /= np.sqrt(np.dot(RotAxis,RotAxis))
     RotAngle = np.arccos(np.dot(z0, [0,0,1.]))
 
-    R_z0 = zt.rotation_matrix(RotAxis, RotAngle)
+    R_z0 = irf.rotation_matrix(RotAxis, RotAngle)
 
-    t0, p0 = zt.rotate_sphr_coords(R_z0, cza, ra)
+    t0, p0 = irf.rotate_sphr_coords(R_z0, cza, ra)
 
     hm = np.zeros(npix)
     hm[np.where(t0 < (np.pi / 2. + np.pi / 20.))] = 1 # Horizon mask; is 0 below the local horizon.
@@ -133,7 +133,7 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
         # Perform a scalar rotation of each component so that the instrument's boresight
         # is pointed toward (z0_cza, 0), the location of the instrument on the
         # earth in the Current-Epoch-RA/Dec coordinate frame.
-        J_f = zt.rotate_jones(J_f, R_z0, multiway=False)
+        J_f = irf.rotate_jones(J_f, R_z0, multiway=False)
 
         if nside != nside_in:
             # Change the map resolution as needed.
@@ -141,12 +141,12 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
             #d = lambda m: hp.ud_grade(m, nside=nside, power=-2.)
                 # I think these two ended up being (roughly) the same?
                 # The apparent normalization problem was really becuase of an freq. interpolation problem.
-                # zt.harmonic_ud_grade is probably better for increasing resolution, but hp.ud_grade is
+                # irf.harmonic_ud_grade is probably better for increasing resolution, but hp.ud_grade is
                 # faster because it's just averaging/tiling instead of doing SHT's
-            d = lambda m: zt.harmonic_ud_grade(m, nside_in, nside)
+            d = lambda m: irf.harmonic_ud_grade(m, nside_in, nside)
             J_f = (np.asarray(map(d, J_f.T))).T
         #
-        J_f = zt.inverse_flatten_jones(J_f) # Change shape to (nfreq,npix,2,2), complex-valued
+        J_f = irf.inverse_flatten_jones(J_f) # Change shape to (nfreq,npix,2,2), complex-valued
         J_f = transform_basis(nside, J_f, z0_cza, R_z0) # right-multiply by the basis transformation matrix from RA/Dec to the Local CST basis.
         Jdata[i,:,:,:] = J_f
 
@@ -156,15 +156,35 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
 
     return Jdata
 
-# def _interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='spline'):
-#     nfreq_in = len(freqs)
-#
-#     if multiway == True:
-#         J_flat = np.zeros((nfreq_in, npix, 8), dtype='float64')
-#         for i in range(nfreq_in):
-#             J_flat[i] = zt.flatten_jones(J_in[i])
-#         J_in = J_flat
+def _interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='spline'):
+    nfreq_in = len(freqs)
 
+    if multiway == True:
+        J_flat = np.zeros((nfreq_in, npix, 8), dtype='float64')
+        for i in range(nfreq_in):
+            J_flat[i] = irf.flatten_jones(J_in[i])
+        J_in = J_flat
+
+    lmax = 3 * nside -1
+    nlm = hp.Alm.getsize(lmax)
+    Jlm_in = np.zeros(nfreq_in, nlm, 8)
+    for i in range(nfreq_in):
+        sht = lambda m: hp.map2alm(m, lmax=lmax)
+        Jlm_in[i,:,:] = (np.asarray(map(sht, J_in.T))).T
+
+    Jlm_out = np.zeros(nfreq, nlm, 8)
+    for lm in range(nlm):
+        for j in range(8):
+            Jlmj_re = np.real(Jlm_in[:,lm,j])
+            Jlmj_im = np.imag(Jlm_in[:,lm,j])
+
+            a = interpolate_pixel(Jlmj_re, freqs, nu_axis, interp_type=interp_type)
+            b = interpolate_pixel(Jlmj_im, freqs, nu_axis, interp_type=interp_type)
+            Jlm_out[:, lm, j] = a + 1j*b
+
+    # J_in.shape = (nfreq_in, ??, 8)
+
+    # Now, return alm's? or spatial maps?
 
 def interpolate_pixel(p, freqs, nu_axis, interp_type='linear'):
     """
@@ -195,7 +215,7 @@ def interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='lin
     if multiway == True:
         J_flat = np.zeros((nfreq_in, npix, 8), dtype='float64')
         for i in range(nfreq_in):
-            J_flat[i] = zt.flatten_jones(J_in[i])
+            J_flat[i] = irf.flatten_jones(J_in[i])
         J_in = J_flat
 
     # J_in.shape = (nfreq_in,npix, 8)
@@ -207,7 +227,7 @@ def interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='lin
     if multiway == True:
         J_m = np.zeros((nfreq, npix, 2,2), dtype='complex128')
         for i in range(nfreq):
-            J_m[i] = zt.inverse_flatten_jones(J_out[i])
+            J_m[i] = irf.inverse_flatten_jones(J_out[i])
         J_out = J_m
 
     for i in range(nfreq):
@@ -352,7 +372,7 @@ def main(params, save=False, restore=False):
 
         RotAxis = np.array([0.,0.,1.])
         RotAngle = -zl_ra
-        R_t = zt.rotation_matrix(RotAxis, RotAngle)
+        R_t = irf.rotation_matrix(RotAxis, RotAngle)
 
         # It = I
         # Qt = Q
@@ -365,21 +385,21 @@ def main(params, save=False, restore=False):
         Vt = np.zeros_like(V)
 
         for i in range(nfreq):
-            It[i] = zt.rotate_healpix_map(I[i], R_t)
-            Qt[i] = zt.rotate_healpix_map(Q[i], R_t)
-            Ut[i] = zt.rotate_healpix_map(U[i], R_t)
-            Vt[i] = zt.rotate_healpix_map(V[i], R_t)
+            It[i] = irf.rotate_healpix_map(I[i], R_t)
+            Qt[i] = irf.rotate_healpix_map(Q[i], R_t)
+            Ut[i] = irf.rotate_healpix_map(U[i], R_t)
+            Vt[i] = irf.rotate_healpix_map(V[i], R_t)
 
         sky_t = np.array([
             [It + Qt, Ut - 1j*Vt],
             [Ut + 1j*Vt, It - Qt]]).transpose(2,3,0,1)
             # Could do this iteratively! Define the differential rotation
             # and apply it in-place to the same sky tensor at each step of the time loop.
-        #ijones_t = zt.rotate_jones(ijones, R_t, multiway=True)
+        #ijones_t = irf.rotate_jones(ijones, R_t, multiway=True)
 
         if debug == True:
             source_index[t] = np.argmax(It[int(nfreq / 2),:])
-            Bt = zt.rotate_healpix_map(abs(ijones[int(nfreq/2),:,0,0])**2. + abs(ijones[int(nfreq/2),:,0,1])**2., R_t.T)
+            Bt = irf.rotate_healpix_map(abs(ijones[int(nfreq/2),:,0,0])**2. + abs(ijones[int(nfreq/2),:,0,1])**2., R_t.T)
             beam_track += Bt / float(ntime)
 
 
