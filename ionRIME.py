@@ -320,7 +320,8 @@ def main(params, save=False, restore=False):
     ijones_init.shape = (nfreq_in, npix, 2,2)
     nfreq > nfreq_in
     """
-    freqs = [(100 + 10 * x) * 1e6 for x in range(11)] # Hz. Must be converted to MHz for file list.
+    freqs = [(160 + x) * 1e6 for x in range(11)] # Hz
+    # freqs = [(100 + 10 * x) * 1e6 for x in range(11)] # Hz. Must be converted to MHz for file list.
     #freqs = [140, 150, 160]
     tmark0 = time.clock()
 
