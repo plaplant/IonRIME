@@ -85,13 +85,17 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
 
     nu0 = str(int(nu_axis[0] / 1e6))
     nuf = str(int(nu_axis[-1] / 1e6))
-    restore_name = interp_type + "_" + "band_" + nu0 + "-" + nuf + "mhz_nfreq" + str(nfreq)+ "_nside" + str(nside) + ".npz"
+    band_str = nu0 + "-" + nuf
+
+    restore_name = interp_type + "_" + "band_" + band_str + "mhz_nfreq" + str(nfreq)+ "_nside" + str(nside) + ".npz"
 
     if os.path.exists('jones_save/' + restore_name) == True:
         return (np.load('jones_save/' + restore_name))['J_out']
 
-    if os.path.exists('local_jones0/nside' + str(nside) + '_Jdata.npz') == True:
-        return np.load('local_jones0/nside' + str(nside) + '_Jdata.npz')['Jdata']
+    local_jones0_file = 'local_jones0/nside' + str(nside) + '_band' + band_str + '_Jdata.npz'
+
+    if os.path.exists(local_jones0_file) == True:
+        return np.load(local_jones0_file)['Jdata']
 
     fbase = '/home/zmart/radcos/zradiopol/HERA_jones_data/HERA_Jones_healpix_'
 
@@ -113,11 +117,11 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
     t0, p0 = irf.rotate_sphr_coords(R_z0, cza, ra)
 
     hm = np.zeros(npix)
-    hm[np.where(t0 < (np.pi / 2. + np.pi / 20.))] = 1 # Horizon mask; is 0 below the local horizon.
+    hm[np.where(cza < (np.pi / 2. + np.pi / 20.))] = 1 # Horizon mask; is 0 below the local horizon.
     # added some padding. Idea being to allow for some interpolation near the horizon. Questionable.
     npix_out = hp.nside2npix(nside)
 
-    Jdata = np.zeros((11,npix_out,2,2),dtype='complex128')
+    Jdata = np.zeros((nfreq,npix_out,2,2),dtype='complex128')
     for i,f in enumerate(fnames):
         J_f = np.loadtxt(f) # J_f.shape = (npix_in, 8)
 
@@ -151,12 +155,16 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
         Jdata[i,:,:,:] = J_f
 
     # If the model at the current nside hasn't been generated before, save it for future reuse.
-    if os.path.exists('local_jones0/nside' + str(nside) + '_Jdata.npz') == False:
-        np.savez('local_jones0/nside' + str(nside) + '_Jdata.npz', Jdata=Jdata)
+    if os.path.exists(local_jones0_file) == False:
+        np.savez(local_jones0_file, Jdata=Jdata)
 
     return Jdata
 
 def _interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='spline'):
+    """
+    A scheme to interpolate the spherical harmonic components of jones matrix elements.
+    Does not seem to work well, and is unused.
+    """
     nfreq_in = len(freqs)
 
     if multiway == True:
@@ -206,7 +214,7 @@ def interpolate_pixel(p, freqs, nu_axis, interp_type='linear'):
     p_out = interpolant(nu_axis)
     return p_out
 
-def interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='linear', save=False):
+def interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='cubic', save=False):
     #nfreq_out = len(nu_axis)
     nfreq_in = len(freqs)
     npix = len(J_in[0,:,0])
@@ -219,10 +227,14 @@ def interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='lin
         J_in = J_flat
 
     # J_in.shape = (nfreq_in,npix, 8)
-    J_out = np.zeros((nfreq,npix,8))
-    for p in xrange(npix):
-        for i in xrange(8):
-            J_out[:,p,i] = interpolate_pixel(J_in[:, p, i], freqs, nu_axis, interp_type=interp_type)
+
+    # J_out = np.zeros((nfreq,npix,8))
+    # for p in xrange(npix):
+    #     for i in xrange(8):
+    #         J_out[:,p,i] = interpolate_pixel(J_in[:, p, i], freqs, nu_axis, interp_type=interp_type)
+
+    interpolant = interpolate.interp1d(freqs, J_in, kind=interp_type,axis=0)
+    J_out = interpolant(nu_axis)
 
     if multiway == True:
         J_m = np.zeros((nfreq, npix, 2,2), dtype='complex128')
@@ -258,7 +270,7 @@ def interpolate_jones_freq(J_in, freqs, nu_axis, multiway=True, interp_type='lin
         np.savez('jones_save/' + fname, J_out=J_out)
     return J_out
 
-def main(params, save=False, restore=False):
+def main(params, restore=False, save=False):
 
     global debug
     debug = True
@@ -271,6 +283,9 @@ def main(params, save=False, restore=False):
 
     global ntime
     ntime = params['ntime']
+
+    global nbaseline
+    nbaseline = len(params['baselines'])
 
     global nu_o
     nu_0 = params['nu_0']
@@ -295,16 +310,24 @@ def main(params, save=False, restore=False):
     """
     sky.shape = (nfreq, npix, 2,2)
     """
-
-
     #I,Q,U,V = [np.random.rand(nfreq,npix) for x in range(4)]
     if False:
         I = np.ones((nfreq,npix))
         Q,U,V = [np.zeros((nfreq, npix)) for x in range(3)]
 
-    if True:
+    if False:
         I = np.zeros((nfreq, npix))
         sc, sa = np.radians([122., 123.]), np.radians([345.,255.])
+        pidx = hp.ang2pix(nside, sc, sa)
+        I[:,pidx] = 10. # Jy? meh
+        Q,U,V = [np.zeros((nfreq, npix)) for x in range(3)]
+
+        I += ( 2. * np.random.random_sample((nfreq,npix)) - 1.) * 1e-4
+        I += 1e-2
+
+    if True:
+        I = np.zeros((nfreq, npix))
+        sc, sa = np.radians([122.]), np.radians([355.])
         pidx = hp.ang2pix(nside, sc, sa)
         I[:,pidx] = 10. # Jy? meh
         Q,U,V = [np.zeros((nfreq, npix)) for x in range(3)]
@@ -320,7 +343,7 @@ def main(params, save=False, restore=False):
     ijones_init.shape = (nfreq_in, npix, 2,2)
     nfreq > nfreq_in
     """
-    freqs = [(160 + x) * 1e6 for x in range(11)] # Hz
+    freqs = [x * 1e6 for x in range(150,171)] # Hz
     # freqs = [(100 + 10 * x) * 1e6 for x in range(11)] # Hz. Must be converted to MHz for file list.
     #freqs = [140, 150, 160]
     tmark0 = time.clock()
@@ -340,7 +363,7 @@ def main(params, save=False, restore=False):
         nuf = str(int(nu_axis[-1] / 1e6))
         fname = "band_" + nu0 + "-" + nuf + "mhz_nfreq" + str(nfreqt)+ "_nside" + str(nside) + ".npz"
         ijones = (np.load('jones_save/' + fname))['J_out']
-        print "Restore Jones model"
+        print "Restored Jones model"
 
     ijonesH = np.transpose(ijones.conj(),(0,1,3,2))
 
@@ -355,7 +378,7 @@ def main(params, save=False, restore=False):
         # Rb = np.transpose(Rb,(2,0,1))
         # RbT = np.transpose(Rb,(0,2,1))
 
-    # For each (t,f):
+    ## For each (t,f):
     # V[t,f,0,0] == V_xx[t,f]
     # V[t,f,0,1] == V_xy[t,f]
     # V[t,f,1,0] == V_yx[t,f]
@@ -367,88 +390,89 @@ def main(params, save=False, restore=False):
     if debug == True:
         source_index = np.zeros(ntime)
         beam_track = np.zeros(npix)
-    for t in range(ntime):
-        zl_cza = z0_cza
-        zl_ra = float(t) * (2. * np.pi  / float(ntime)) / 2.
 
-        RotAxis = np.array([0.,0.,1.])
-        RotAngle = -zl_ra
-        R_t = irf.rotation_matrix(RotAxis, RotAngle)
+    for b in baselines:
+        for t in range(ntime):
+            zl_cza = z0_cza
+            zl_ra = (float(t) / float(ntime)) * np.radians(10.)
 
-        # It = I
-        # Qt = Q
-        # Ut = U
-        # Vt = V
+            RotAxis = np.array([0.,0.,1.])
+            RotAngle = -zl_ra
+            R_t = irf.rotation_matrix(RotAxis, RotAngle)
 
-        It = np.zeros_like(I)
-        Qt = np.zeros_like(Q)
-        Ut = np.zeros_like(U)
-        Vt = np.zeros_like(V)
+            # It = I
+            # Qt = Q
+            # Ut = U
+            # Vt = V
 
-        for i in range(nfreq):
-            It[i] = irf.rotate_healpix_map(I[i], R_t)
-            Qt[i] = irf.rotate_healpix_map(Q[i], R_t)
-            Ut[i] = irf.rotate_healpix_map(U[i], R_t)
-            Vt[i] = irf.rotate_healpix_map(V[i], R_t)
+            It = np.zeros_like(I)
+            Qt = np.zeros_like(Q)
+            Ut = np.zeros_like(U)
+            Vt = np.zeros_like(V)
 
-        sky_t = np.array([
-            [It + Qt, Ut - 1j*Vt],
-            [Ut + 1j*Vt, It - Qt]]).transpose(2,3,0,1)
-            # Could do this iteratively! Define the differential rotation
-            # and apply it in-place to the same sky tensor at each step of the time loop.
-        #ijones_t = irf.rotate_jones(ijones, R_t, multiway=True)
+            for i in range(nfreq):
+                It[i] = irf.rotate_healpix_mindex(I[i], R_t)
+                Qt[i] = irf.rotate_healpix_mindex(Q[i], R_t)
+                Ut[i] = irf.rotate_healpix_mindex(U[i], R_t)
+                Vt[i] = irf.rotate_healpix_mindex(V[i], R_t)
 
-        if debug == True:
-            source_index[t] = np.argmax(It[int(nfreq / 2),:])
-            Bt = irf.rotate_healpix_map(abs(ijones[int(nfreq/2),:,0,0])**2. + abs(ijones[int(nfreq/2),:,0,1])**2., R_t.T)
-            beam_track += Bt / float(ntime)
+            sky_t = np.array([
+                [It + Qt, Ut - 1j*Vt],
+                [Ut + 1j*Vt, It - Qt]]).transpose(2,3,0,1)
+                # Could do this iteratively! Define the differential rotation
+                # and apply it in-place to the same sky tensor at each step of the time loop.
+            #ijones_t = irf.rotate_jones(ijones, R_t, multiway=True)
 
-
-        for nu_i, nu in enumerate(nu_axis):
-            #print "t is " + str(t) + ", nu_i is " + str(nu_i)
-
-            ## Ionosphere
-            """
-            ionrot.shape = (nfreq,npix 2,2)
-            """
-
-            # RMangle = 2. * np.pi * np.random.rand(nfreq,npix)
-            # ion_cos = np.cos(RMangle)
-            # ion_sin = np.sin(RMangle)
-            ion_cos = np.ones((nfreq, npix))
-            ion_sin = np.zeros((nfreq, npix))
-            ion_rot = np.array([[ion_cos, ion_sin],[-ion_sin,ion_cos]])
-            ion_rot = np.transpose(ion_rot,(2,3,0,1))
-            ion_rotT = np.transpose(ion_rot,(0,1,3,2))
-            # worried abou this...is the last line producing the right ordering,
-            # or is ion_rot unchanged
-
-            ## Fringe
-            """K.shape = (npix)"""
-
-            c = 299792458 # meters / sec
-            b = np.array([24.,0.,0.]) # meters, in Local coordinates
-            b =
-            s = hp.pix2vec(nside, hpxidx)
-            b_dot_s = np.einsum('a...,a...',b,s)
-            tau = b_dot_s / c
-            K = np.exp(-2. * np.pi * 1j * tau * nu)
+            if debug == True:
+                source_index[t] = np.argmax(It[int(nfreq / 2),:])
+                Bt = irf.rotate_healpix_map(abs(ijones[int(nfreq/2),:,0,0])**2. + abs(ijones[int(nfreq/2),:,0,1])**2., R_t.T)
+                beam_track += Bt / float(ntime)
 
 
-            # Oleg, eat your heart out
-            compose_4M = lambda a,b,c,d,e: M(M(M(M(a,b),c),d),e)
+            for nu_i, nu in enumerate(nu_axis):
+                #print "t is " + str(t) + ", nu_i is " + str(nu_i)
 
-            C = compose_4M(
-                ijones[nu_i],
-                ion_rot[nu_i],
-                sky_t[nu_i],
-                ion_rotT[nu_i],
-                ijonesH[nu_i])
+                ## Ionosphere
+                """
+                ionrot.shape = (nfreq,npix 2,2)
+                """
 
-            # could also be:
-            # reduce(M, [ijones[nu_i],ion_rot[nu_i]])
+                # RMangle = 2. * np.pi * np.random.rand(nfreq,npix)
+                # ion_cos = np.cos(RMangle)
+                # ion_sin = np.sin(RMangle)
+                ion_cos = np.ones((nfreq, npix))
+                ion_sin = np.zeros((nfreq, npix))
+                ion_rot = np.array([[ion_cos, ion_sin],[-ion_sin,ion_cos]])
+                ion_rot = np.transpose(ion_rot,(2,3,0,1))
+                ion_rotT = np.transpose(ion_rot,(0,1,3,2))
+                # worried abou this...is the last line producing the right ordering,
+                # or is ion_rot unchanged
 
-            Vis[t,nu_i,:,:] = RIME_integral(C, K, Vis[t,nu_i,:,:].squeeze())
+                ## Fringe
+                """K.shape = (npix)"""
+
+                c = 299792458. # meters / sec
+                b = np.array([0.,30.,0.]) # meters, in Local coordinates
+                s = hp.pix2vec(nside, hpxidx)
+                b_dot_s = np.einsum('a...,a...',b,s)
+                tau = b_dot_s / c
+                K = np.exp(-2. * np.pi * 1j * tau * nu)
+
+
+                # Oleg, eat your heart out
+                compose_4M = lambda a,b,c,d,e: M(M(M(M(a,b),c),d),e)
+
+                C = compose_4M(
+                    ijones[nu_i],
+                    ion_rot[nu_i],
+                    sky_t[nu_i],
+                    ion_rotT[nu_i],
+                    ijonesH[nu_i])
+
+                # could also be:
+                # reduce(M, [ijones[nu_i],ion_rot[nu_i]])
+
+                Vis[t,nu_i,:,:] = RIME_integral(C, K, Vis[t,nu_i,:,:].squeeze())
 
     tmark_loopstop = time.clock()
     print "Visibility loop completed in " + str(tmark_loopstop - tmark_loopstart)
@@ -458,30 +482,38 @@ def main(params, save=False, restore=False):
 
     #if os.path.exists(out_name) == False:
     np.savez('output_vis/' + out_name, Vis=Vis)
-    np.savez('source_index.npz', source_index=source_index)
-    np.savez('beam_track.npz', beam_track=beam_track)
+    if debug == True:
+        np.savez('debug/source_index.npz', source_index=source_index)
+        np.savez('debug/beam_track.npz', beam_track=beam_track)
 
 if __name__ == '__main__':
+    print "Note! Horizon mask is off!"
     print "Note! Ionosphere set to Identity!"
     #print "Note: Horizon mask turned off!"
     #print "Note! Sky rotation turned off"
-    print "Note! time rotation angle is halved!"
+    # print "Note! time rotation angle is halved!"
 
     #########
     # Dimensions and Boundaries
 
-    nside = 2**6 # sets the spatial resolution of the simulation, for a given baseline
+    nside = 2**7 # sets the spatial resolution of the simulation, for a given baseline
 
-    nfreq = 61 # the number of frequency channels at which visibilities will be computed.
+    nfreq = 41 # the number of frequency channels at which visibilities will be computed.
 
-    ntime = 24 # the number of time samples in one rotation of the earch that will be computed
+    ntime = 24  # the number of time samples in one rotation of the earch that will be computed
 
-    nu_0 = 1.3e8 # Hz. The high end of the simulated frequency band.
+    nu_0 = 1.5e8 # Hz. The high end of the simulated frequency band.
 
-    nu_f = 1.6e8 # Hz. The low end of the simulated frequency band.
+    nu_f = 1.7e8 # Hz. The low end of the simulated frequency band.
 
-    interp_type = 'spline'
+    # baselines = irf.get_baselines()
+    baselines = [[30.,0,0],[15.,0,0]]
+
+    interp_type = 'cubic'
     # options for interpolation are:
+    # 'linear' and 'cubic', both via scipy.interpolate.interp1d()
+
+    ## OLD OPTIONS
     #   'linear' : linear interpolation between nodes
     #   'hermite': Piecewise Cubic Hermite Interpolating Polynomials between each
     #       pair of nodes. This produces a monotonic interpolant between each pair
@@ -500,6 +532,8 @@ if __name__ == '__main__':
             'nu_0':nu_0,
 
             'nu_f':nu_f,
+
+            'baselines':baselines,
 
             'interp_type':interp_type
 

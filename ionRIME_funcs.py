@@ -127,6 +127,19 @@ def harmonic_ud_grade(m, nside_in, nside_out):
     alm = hp.map2alm(m, lmax=lmax)
     return hp.alm2map(alm, nside_out, lmax=lmax, verbose=False)
 
+def rotate_healpix_mindex(m, R):
+    npix = len(m)
+    nside = hp.npix2nside(npix)
+    hpxidx = np.arange(npix)
+    c, a = hp.pix2ang(nside, hpxidx)
+
+    t, p = rotate_sphr_coords(R, c, a)
+    rotidx = hp.ang2pix(nside, t, p)
+
+    m_R = m[rotidx]
+
+    return m_R
+
 def rotate_healpix_map(m, R):
     """
     Performs a scalar rotation of the map relative to the Healpix coordinate
