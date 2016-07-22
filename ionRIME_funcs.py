@@ -178,3 +178,29 @@ def compose_healpix_map_rotations(m,RL):
     arg = [m]
     arg.extend(RL)
     return reduce(lambda m, R: rotate_healpix_map(m, R), arg)
+
+def transform_baselines(baselines_list):
+    """
+    Transforms
+    """
+    # Compute coordinate rotation matrix
+    z0_cza = np.radians(121.) # Hardcoded for HERA/PAPER latitude
+    z0 = r_hat_cart(z0_cza, 0.)
+
+    RotAxis = np.cross(z0, np.array([0,0,1.]))
+    RotAxis /= np.sqrt(np.dot(RotAxis,RotAxis))
+    RotAngle = np.arccos(np.dot(z0, [0,0,1.]))
+
+    R_z0 = rotation_matrix(RotAxis, RotAngle)
+
+    # Rb = np.array([
+    # [0,0,-1],
+    # [0,-1,0],
+    # [-1,0,0]
+    # ])
+
+    # fR = np.einsum('ab,bc->ac', Rb, R_z0) # matrix product of two rotations
+
+    bl_eq = np.einsum('...ab,...b->...a', R_z0.T, b) # this give the right fringes. See fringe_rotate.ipynb
+
+    return bl_eq

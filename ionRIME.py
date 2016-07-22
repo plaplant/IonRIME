@@ -42,6 +42,10 @@ def RIME_integral(C, K, V):
     return V / float(npix)
 
 def transform_basis(nside, jones, z0_cza, R_z0):
+    """
+    At zenith in the local frame the 'x' feed is aligned with 'theta' and
+    the 'y' feed is aligned with 'phi'
+    """
     npix = hp.nside2npix(nside)
     hpxidx = np.arange(npix)
     cza, ra = hp.pix2ang(nside, hpxidx)
@@ -126,6 +130,7 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
         J_f = np.loadtxt(f) # J_f.shape = (npix_in, 8)
 
         J_f = J_f * np.tile(hm, 8).reshape(8, npix).transpose(1,0) # Apply horizon mask
+
         # Could future "rotation" of these zeroed-maps have small errors at the
         # edges of the horizon? due to the way healpy interpolates.
         # Unlikely to be important.
@@ -296,6 +301,8 @@ def main(params, restore=False, save=False):
     global interp_type
     interp_type = params['interp_type']
 
+    baselines = params['baselines']
+
     npix = hp.nside2npix(nside)
     hpxidx = np.arange(npix)
     cza, ra = hp.pix2ang(nside, hpxidx)
@@ -351,10 +358,12 @@ def main(params, restore=False, save=False):
     if restore == False:
         Jdata = instrument_setup(nside, z0_cza, freqs, restore=restore)
         #np.savez('var_test/Jdata_test.npz', Jdata=Jdata)
+
         tmark_inst = time.clock()
         print "Completed instrument_setup(), in " + str(tmark_inst - tmark0)
 
         ijones = interpolate_jones_freq(Jdata, freqs, nu_axis, interp_type=interp_type, save=save)
+
         tmark_interp = time.clock()
         print "Completed interpolate_jones_freq(), in " + str(tmark_interp - tmark_inst)
 
@@ -378,12 +387,15 @@ def main(params, restore=False, save=False):
         # Rb = np.transpose(Rb,(2,0,1))
         # RbT = np.transpose(Rb,(0,2,1))
 
+    ## Baselines
+    bl_eq = irf.transform_baselines(baselines)
     ## For each (t,f):
     # V[t,f,0,0] == V_xx[t,f]
     # V[t,f,0,1] == V_xy[t,f]
     # V[t,f,1,0] == V_yx[t,f]
     # V[t,f,1,1] == V_yy[t,f]
-    Vis = np.zeros(ntime * nfreq * 2 * 2, dtype='complex128').reshape(ntime, nfreq, 2, 2)
+    Vis = np.zeros(nbaseline * ntime * nfreq * 2 * 2, dtype='complex128')
+    Vis = Vis.reshape(nbaseline, ntime, nfreq, 2, 2)
 
     tmark_loopstart = time.clock()
 
@@ -391,10 +403,11 @@ def main(params, restore=False, save=False):
         source_index = np.zeros(ntime)
         beam_track = np.zeros(npix)
 
-    for b in baselines:
+    for b_i in range(baselines_eq.shape[0]):
         for t in range(ntime):
             zl_cza = z0_cza
-            zl_ra = (float(t) / float(ntime)) * np.radians(10.)
+            total_angle = 10. # degrees
+            zl_ra = (float(t) / float(ntime)) * np.radians(total_angle)
 
             RotAxis = np.array([0.,0.,1.])
             RotAngle = -zl_ra
@@ -452,7 +465,7 @@ def main(params, restore=False, save=False):
                 """K.shape = (npix)"""
 
                 c = 299792458. # meters / sec
-                b = np.array([0.,30.,0.]) # meters, in Local coordinates
+                b = baselines_eq[b_i]# meters, in the Equatorial basis
                 s = hp.pix2vec(nside, hpxidx)
                 b_dot_s = np.einsum('a...,a...',b,s)
                 tau = b_dot_s / c
@@ -472,7 +485,7 @@ def main(params, restore=False, save=False):
                 # could also be:
                 # reduce(M, [ijones[nu_i],ion_rot[nu_i]])
 
-                Vis[t,nu_i,:,:] = RIME_integral(C, K, Vis[t,nu_i,:,:].squeeze())
+                Vis[b_i,t,nu_i,:,:] = RIME_integral(C, K, Vis[b_i,t,nu_i,:,:].squeeze())
 
     tmark_loopstop = time.clock()
     print "Visibility loop completed in " + str(tmark_loopstop - tmark_loopstart)
@@ -496,18 +509,18 @@ if __name__ == '__main__':
     #########
     # Dimensions and Boundaries
 
-    nside = 2**7 # sets the spatial resolution of the simulation, for a given baseline
+    nside = 2**4 # sets the spatial resolution of the simulation, for a given baseline
 
     nfreq = 41 # the number of frequency channels at which visibilities will be computed.
 
-    ntime = 24  # the number of time samples in one rotation of the earch that will be computed
+    ntime = 10  # the number of time samples in one rotation of the earch that will be computed
 
     nu_0 = 1.5e8 # Hz. The high end of the simulated frequency band.
 
     nu_f = 1.7e8 # Hz. The low end of the simulated frequency band.
 
     # baselines = irf.get_baselines()
-    baselines = [[30.,0,0],[15.,0,0]]
+    baselines = [[15.,0,0],[15.,0,0]]
 
     interp_type = 'cubic'
     # options for interpolation are:
