@@ -2,6 +2,7 @@ import numpy as np
 import math
 import healpy as hp
 
+from radiono import std_hour
 from radiono import physics as phys, interp as itp, ionex_file as inx
 
 def rotate_sphr_coords(R, theta, phi):
@@ -181,12 +182,14 @@ def compose_healpix_map_rotations(m,RL):
     arg.extend(RL)
     return reduce(lambda m, R: rotate_healpix_map(m, R), arg)
 
-def transform_baselines(baselines_list):
+def local_rot(z0_cza):
     """
-    Transforms
+    Convinience function for the frequently used rotation matrix from cza/ra to
+    local za/az coordinate frame.
+
+    z0_cza should have units of radians.
     """
-    # Compute coordinate rotation matrix
-    z0_cza = np.radians(121.) # Hardcoded for HERA/PAPER latitude
+
     z0 = r_hat_cart(z0_cza, 0.)
 
     RotAxis = np.cross(z0, np.array([0,0,1.]))
@@ -194,6 +197,18 @@ def transform_baselines(baselines_list):
     RotAngle = np.arccos(np.dot(z0, [0,0,1.]))
 
     R_z0 = rotation_matrix(RotAxis, RotAngle)
+
+    return R_z0
+
+
+def transform_baselines(baselines_list):
+    """
+    Transforms
+    """
+    # Compute coordinate rotation matrix
+    z0_cza = np.radians(120.7215) # Hardcoded for HERA/PAPER latitude
+
+    R_z0 = local_rot(z0_cza)
 
     # Rb = np.array([
     # [0,0,-1],
@@ -211,14 +226,16 @@ def ion_RM(B_para, TEC_path):
     IFR = 2.6e-17 * B_para * TEC_path
     return IFR
 
-def _test_ionosphere_map():
-    date_str = '2004-05-19T00:00:00'
+def _test_ionosphere_map(date_str='2004-05-19T00:00:00'):
+    # date_str = '2004-05-19T00:00:00'
     lat_str = '30d43m17.5ss'
     lon_str = '21d25m41.9se'
 
+
+
     year, month, day = date_str.split('T')[0].split('-')
 
-    tec_hp, rms_hp, ion_height = inx.IONEX_data(year, month, day, verbose=True)
+    tec_hp, rms_hp, ion_height = inx.IONEX_data(year, month, day, verbose=False)
 
     nside_in = 2**4
     npix_in = hp.nside2npix(nside_in)
@@ -244,14 +261,22 @@ def _test_ionosphere_map():
 
     RM_maps = ion_RM(B_para, TEC_path)
 
-    z0_cza = np.radians(121.)
-    z0 = zt.r_hat_cart(z0_cza, 0.)
-
-    RotAxis = np.cross(z0, np.array([0,0,1.]))
-    RotAxis /= np.sqrt(np.dot(RotAxis,RotAxis))
-    RotAngle = np.arccos(np.dot(z0, [0,0,1.]))
-
-    R_z0 = zt.rotation_matrix(RotAxis, RotAngle)
-
     for t in range(24):
         RM_maps[t] = rotate_healpix_map(RM_maps[t], R_z0.T)
+
+def std_day_str(n):
+    if n <= 10:
+        day_str = '0' + str(n)
+    else:
+        day_str = str(n)
+
+def date_range(day0, ndays):
+    """
+    Gets the dates at which to compute ionosphere maps over a range of days.
+    """
+
+    year='2010'
+    month='06'
+    day0=str(day0)
+
+    date_strs = ["-".join((year,month,std_day_str(n) for n in range(ndays) ]

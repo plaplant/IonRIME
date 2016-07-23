@@ -154,7 +154,9 @@ def instrument_setup(nside, z0_cza, freqs, restore=False):
                 # faster because it's just averaging/tiling instead of doing SHT's
             d = lambda m: irf.harmonic_ud_grade(m, nside_in, nside)
             J_f = (np.asarray(map(d, J_f.T))).T
-        #
+                # The inner transpose is so that correct dimension is map()'ed over,
+                # and then the outer transpose returns the array to its original shape.
+
         J_f = irf.inverse_flatten_jones(J_f) # Change shape to (nfreq,npix,2,2), complex-valued
         J_f = transform_basis(nside, J_f, z0_cza, R_z0) # right-multiply by the basis transformation matrix from RA/Dec to the Local CST basis.
         Jdata[i,:,:,:] = J_f
@@ -307,7 +309,7 @@ def main(params, restore=False, save=False):
     hpxidx = np.arange(npix)
     cza, ra = hp.pix2ang(nside, hpxidx)
 
-    z0_cza = np.radians(121.)
+    z0_cza = np.radians(120.7215)
     z0_ra = np.radians(0.)
 
     global nu_axis #  OH GOD HERE WE GO
@@ -504,7 +506,7 @@ if __name__ == '__main__':
     print "Note! Ionosphere set to Identity!"
     #print "Note: Horizon mask turned off!"
     #print "Note! Sky rotation turned off"
-    # print "Note! time rotation angle is halved!"
+    print "Note! time rotation angle is not 360deg"
 
     #########
     # Dimensions and Boundaries
@@ -514,6 +516,8 @@ if __name__ == '__main__':
     nfreq = 41 # the number of frequency channels at which visibilities will be computed.
 
     ntime = 10  # the number of time samples in one rotation of the earch that will be computed
+
+    ndays = 1 # The number of days that will be simulated.
 
     nu_0 = 1.5e8 # Hz. The high end of the simulated frequency band.
 
@@ -541,6 +545,8 @@ if __name__ == '__main__':
             'nfreq':nfreq,
 
             'ntime':ntime,
+
+            'ndays':ndays,
 
             'nu_0':nu_0,
 
