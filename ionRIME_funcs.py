@@ -200,6 +200,42 @@ def local_rot(z0_cza):
 
     return R_z0
 
+def transform_basis(nside, jones, z0_cza, R_z0):
+    """
+    At zenith in the local frame the 'x' feed is aligned with 'theta' and
+    the 'y' feed is aligned with 'phi'
+    """
+    npix = hp.nside2npix(nside)
+    hpxidx = np.arange(npix)
+    cza, ra = hp.pix2ang(nside, hpxidx)
+
+    # Rb is the rotation relating the E-field basis coordinate frame to the local horizontal zenith.
+    # (specific to this instrument response simulation data)
+    Rb = np.array([
+    [0,0,-1],
+    [0,-1,0],
+    [-1,0,0]
+    ])
+
+    fR = np.einsum('ab,bc->ac', Rb, R_z0) # matrix product of two rotations
+
+    tb, pb = irf.rotate_sphr_coords(fR, cza, ra)
+
+    cza_v = irf.t_hat_cart(cza, ra)
+    ra_v = irf.p_hat_cart(cza, ra)
+
+    tb_v = irf.t_hat_cart(tb, pb)
+
+    fRcza_v = np.einsum('ab...,b...->a...', fR, cza_v)
+    fRra_v = np.einsum('ab...,b...->a...', fR, ra_v)
+
+    cosX = np.einsum('a...,a...', fRcza_v, tb_v)
+    sinX = np.einsum('a...,a...', fRra_v, tb_v)
+
+    basis_rot = np.array([[cosX, sinX],[-sinX, cosX]])
+    basis_rot = np.transpose(basis_rot,(2,0,1))
+
+    return M(jones, basis_rot)
 
 def transform_baselines(baselines_list):
     """
@@ -218,6 +254,7 @@ def transform_baselines(baselines_list):
 
     # fR = np.einsum('ab,bc->ac', Rb, R_z0) # matrix product of two rotations
 
+    b = np.array(baselines_list)
     bl_eq = np.einsum('...ab,...b->...a', R_z0.T, b) # this give the right fringes. See fringe_rotate.ipynb
 
     return bl_eq
@@ -279,4 +316,4 @@ def date_range(day0, ndays):
     month='06'
     day0=str(day0)
 
-    date_strs = ["-".join((year,month,std_day_str(n) for n in range(ndays) ]
+    # date_strs = ["-".join((year,month,std_day_str(n) for n in range(ndays) ]
