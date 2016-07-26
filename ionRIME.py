@@ -390,7 +390,8 @@ def main(params, restore=False, save=False):
         # RbT = np.transpose(Rb,(0,2,1))
 
     ## Baselines
-    bl_eq = irf.transform_baselines(baselines)
+    bl_eq = irf.transform_baselines(baselines) # get baseline vectors in equatorial coordinates
+
     ## For each (t,f):
     # V[t,f,0,0] == V_xx[t,f]
     # V[t,f,0,1] == V_xy[t,f]
